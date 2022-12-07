@@ -4,3 +4,6 @@ This contains the material for a project for my ENVS250 Geographic Infromation S
 
 The car crashes dataset was too big to upload to Github (248,992 KB).  It was downloaded from here:
 https://rlisdiscovery.oregonmetro.gov/datasets/drcMetro::crashes/about
+
+The car crashes data documentation is found here:
+https://www.oregon.gov/odot/Data/documents/CDS_Code_Manual.pdf
