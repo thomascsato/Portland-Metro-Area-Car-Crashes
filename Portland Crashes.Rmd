@@ -1,0 +1,149 @@
+---
+title: "Portland Crashes"
+author: "Thomas Sato"
+date: "2022-10-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This dataset is from RLIS, and it contains 321,829 car crashes in the Portland Metro area from 2007 to 2020.
+
+Reading in the data:
+```{r}
+library(tidyverse)
+crashes <- read_csv("Crashes.csv")
+orpop <- read_csv("https://raw.githubusercontent.com/thomascsato/Portland-Metro-Area-Car-Crashes/main/Oregon%20Cities%20Population.csv", col_names = c("Rank", "City", "Population"))
+Streets <- read_csv("https://raw.githubusercontent.com/thomascsato/Portland-Metro-Area-Car-Crashes/main/Streets.csv")
+```
+
+
+# Distributions
+
+```{r}
+ggplot(crashes, aes(x = fct_rev(fct_infreq(GIS_JURIS)))) +
+  geom_bar(fill = "skyblue", color = "black") +
+  geom_text(aes(label = ..count..), stat = "count", size = 2.5, hjust = 0) +
+  coord_flip() +
+  ggtitle("Distribution of Car Crashes by City in Portland Metro Area (2007-2020)") +
+  theme(plot.title = element_text(hjust = 1.5)) +
+  ylab("Number of Car Crashes") +
+  xlab("City/Area") +
+  scale_y_continuous(limits = c(0, 200000))
+```
+
+```{r}
+ncrash <- crashes %>%
+  group_by(GIS_JURIS) %>%
+  summarize(n = n())
+
+# Fairview city population data was inaccurate
+orpop[which(orpop$City == "Fairview"), 3] <- 9382
+
+percap <- left_join(ncrash, orpop, by = c("GIS_JURIS" = "City")) %>%
+  mutate(cpercap = n / Population) %>%
+  arrange(desc(cpercap))
+
+ggplot(percap, aes(fct_reorder(GIS_JURIS, cpercap), cpercap)) +
+  geom_col(fill = "chartreuse", color = "black") +
+  coord_flip() +
+  xlab("City/Area") +
+  ylab("Number of Crashes Per Capita") +
+  ggtitle("Number of Car Crashes Per Capita in Portland Metro Area From 2007-2020") +
+  scale_y_continuous(limits = c(0, 0.4)) +
+  theme(plot.title = element_text(hjust = 1.2)) +
+  geom_text(aes(label = round(cpercap, 3)), size = 3, hjust = -0.1)
+```
+
+# Streets Analysis
+
+Initial Data Transformation
+```{r}
+# Getting the sum length of all the streets because the vector shapefile has every street in segments
+streetlen <- Streets %>%
+  group_by(PREFIX, STREETNAME, FTYPE) %>%
+  summarize(stlength = sum(LENGTH)) %>%
+  # Ifelse statement used in order to not have NAs in some full street names
+  mutate(FullStName = ifelse(is.na(PREFIX), paste(STREETNAME, FTYPE, sep = " "),
+                             paste(PREFIX, STREETNAME, FTYPE, sep = " ")))
+
+# Dataset containing the number of crashes per street
+crashesperstreet <- crashes %>%
+  group_by(ST_FULL_NM) %>%
+  summarize(n = n()) %>%
+  arrange(desc(n))
+
+# Joins together the dataset in order to have a variable for crashes per foot of street
+crashesperft <- left_join(crashesperstreet, streetlen, by = c("ST_FULL_NM" = "FullStName")) %>%
+  mutate(crashes_per_foot = n / stlength) %>%
+  arrange(desc(crashes_per_foot)) %>%
+  # Ranking for every street in terms of crashes per foot
+  mutate(index = 1:nrow(crashesperstreet)) %>%
+  # We filter out Kelly Ave because it is an outlier - Experience says that there is no reason to think that Kelly Ave has that high of a ratio of crashes per foot of street, so I assume there must be an error in data entry or something like that
+  filter(ST_FULL_NM != "SW KELLY AVE")
+```
+## Visualizations Relating to the Number of Crashes per Foot of Street
+```{r}
+# Graph of how the number of crashes per foot decreases in order from greatest to least
+ggplot(crashesperft, aes(x = index, y = crashes_per_foot)) +
+  geom_point(size = 0.75) +
+  theme_bw() +
+  ggtitle("Crashes per Foot, Ordered Highest to Lowest") +
+  xlab("Street (Indexed Highest Crashes per Foot to Lowest)") +
+  ylab("Crashes per Foot")
+```
+
+### Basic Modeling
+```{r}
+# Attempting to create a transformation (1 / X) in order to create a linear regression model
+inversecrashesmodel <- lm(crashes_per_foot ~ I(1/(index)), data = crashesperft)
+summary(inversecrashesmodel)
+
+# Visualizing the transformation
+ggplot(crashesperft, aes(x = (1/index), y = crashes_per_foot)) +
+  geom_point(size = 0.75) +
+  theme_bw() +
+  ggtitle("Crashes per Foot with an x = (1 / Index) Transformation") +
+  xlab("Street (1 / Index)") +
+  ylab("Crashes per Foot")
+```
+
+### Playing with R-squared
+I noticed that the R-squared value of 0.84 was pretty good, but if I played around with the transformation a little bit, I was able to increase the R-squared value.
+```{r}
+# This will make a vector of R-squared values of 
+rsqvector <- c()
+for(i in 0:30) {
+  rsq <- summary(lm(crashes_per_foot ~ I(1/(index + i)), data = crashesperft))$r.squared
+  rsqvector <- append(rsqvector, rsq)
+}
+
+ggplot(data.frame(r2 = rsqvector, ind = 0:30), aes(x = ind, y = r2)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = 0:30) +
+  theme_classic() +
+  ggtitle("R-squared Values of Each Model as a Function of the Shift in the Index") +
+  xlab("Shift of Index in Model (1 / (Index + x))") +
+  ylab("R-squared Value of Model")
+
+max(rsqvector)
+which.max(rsqvector) - 1
+
+ggplot(crashesperft, aes(x = (1/(index + 5)), y = crashes_per_foot)) +
+  geom_point(size = 0.75) +
+  theme_bw() +
+  ggtitle("Crashes per Foot (Highest R-squared Index Transformation)") +
+  xlab("Street (1 / (Index + 5))") +
+  ylab("Crashes per Foot")
+```
+
+Noticing the interesting geometry of the shift of index in the model and the R-squared value of the model.  Honestly, I have no idea what sort of mathematics causes these shapes to be so geometric, or why it is 5 that maximizes the R-squared value at 0.950065.
+
+```{r}
+maxrsq <- lm(crashes_per_foot ~ I(1/(index + 5)), data = crashesperft)
+summary(maxrsq)
+```
+I kind of ran out of time for the project to play with the data a little bit more, which is a bit disappointing, because there is so much cool stuff in this dataset, but I think I will keep playing with it to discover anything else.  I think the index transformation stuff is quite interesting.  According to this model which may or may not be super accurate, if you gave me a ranking of a particular street compared to the others, I could predict how many crashes occur over the length of the street.
